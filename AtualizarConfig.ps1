@@ -1,4 +1,4 @@
-﻿Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 # Define caminho do log (salvo na mesma pasta do script)
 $Global:LogPath = Join-Path $PSScriptRoot "log_modificacoes_worker.txt"
@@ -116,11 +116,6 @@ Function Obter-ServicosPorFila {
 
 # Função para atualizar número de provider no worker ================================================================================================
 Function Atualizar-NumeroDeProviders {
-    do {
-        $NovoValor = Read-Host "Informe o novo valor para 'NumeroDeProviders' (somente números)"
-        $valido = $NovoValor -match '^[0-9]+$'
-        if (-not $valido) { Write-Warning "Digite apenas números." }
-    } while (-not $valido)
 
     Write-Host "`nDeseja alterar os serviços de:"
     Write-Host "1 - Apenas Agendamento"
@@ -135,9 +130,40 @@ Function Atualizar-NumeroDeProviders {
     }
 
     Write-Host "`n📋 Serviços encontrados:`n"
+
     for ($i = 0; $i -lt $servicosFiltrados.Count; $i++) {
-        Write-Host "$($i + 1)) $($servicosFiltrados[$i].DisplayName)"
-    }
+        $svc = $servicosFiltrados[$i]
+        $caminhoExe = $svc.PathName -replace '"', ''
+        $diretorio = Split-Path $caminhoExe
+        $configPath = Join-Path $diretorio "Benner.Tecnologia.Tasks.Worker.exe.config"
+    
+        $numeroProviders = "N/A"
+        if (Test-Path $configPath) {
+            try {
+                [xml]$xml = Get-Content $configPath
+                $node = $xml.configuration.appSettings.add | Where-Object { $_.key -eq "NumeroDeProviders" }
+                if ($node) { $numeroProviders = $node.value }
+            } catch {
+                $numeroProviders = "Erro ao ler config"
+            }
+        } else {
+            $numeroProviders = "Config não encontrado"
+        }
+    
+        # Mostra nome do serviço
+        Write-Host "$($i + 1)) $($svc.DisplayName)  (" -NoNewline
+    
+        # Destaque do trecho "NumeroDeProviders = X"
+        Write-Host "NumeroDeProviders = $numeroProviders" -ForegroundColor Yellow -NoNewline
+    
+        Write-Host ")"
+    }    
+
+    do {
+        $NovoValor = Read-Host "`n Informe o novo valor para 'NumeroDeProviders' (somente números)"
+        $valido = $NovoValor -match '^[0-9]+$'
+        if (-not $valido) { Write-Warning "Digite apenas números." }
+    } while (-not $valido)
 
     $selecionados = @()
     $opcao = Read-Host "`nDigite os números dos serviços separados por vírgula (ou 'todos' para alterar todos)"
@@ -641,28 +667,68 @@ Function Atualizar-Servidor {
 
 Function Atualizar-MultiplicadorCPU {
 
-    # Pergunta sobre tipo de serviço (Agendamento, BTL ou Todos)
     Write-Host "`nDeseja alterar os serviços de:"
     Write-Host "1 - Apenas Agendamento"
     Write-Host "2 - Apenas BTL"
     Write-Host "3 - Todos"
     $tipoFiltro = Read-Host "Digite 1, 2 ou 3"
 
-    # Filtrar por Fila no .config
     $servicosFiltrados = Obter-ServicosPorFila -tipoFiltro $tipoFiltro
-    if (-not $servicosFiltrados -or $servicosFiltrados.Count -eq 0) { return }
+
+    if (-not $servicosFiltrados -or $servicosFiltrados.Count -eq 0) {
+        return
+    }
+
+    Write-Host "`n📋 Serviços encontrados:`n"
+
+    for ($i = 0; $i -lt $servicosFiltrados.Count; $i++) {
+        $svc = $servicosFiltrados[$i]
+        $caminhoExe = $svc.PathName -replace '"', ''
+        $diretorio = Split-Path $caminhoExe
+        $configPath = Join-Path $diretorio "Benner.Tecnologia.Tasks.Worker.exe.config"
+
+        $multiplicador = "N/A"
+        if (Test-Path $configPath) {
+            try {
+                [xml]$xml = Get-Content $configPath
+                $node = $xml.configuration.appSettings.add | Where-Object { $_.key -eq "MultiplicadorCPU" }
+                if ($node) { $multiplicador = $node.value }
+            } catch {
+                $multiplicador = "Erro ao ler config"
+            }
+        } else {
+            $multiplicador = "Config não encontrado"
+        }
+
+        Write-Host "$($i + 1)) $($svc.DisplayName)  (" -NoNewline
+        Write-Host "MultiplicadorCPU = $multiplicador" -ForegroundColor Yellow -NoNewline
+        Write-Host ")"
+    }
 
     do {
-        $NovoValor = Read-Host "Informe o novo valor para o parâmetro 'MultiplicadorCPU' (somente números ou digite 'remover' para remover o parâmetro)"
-        $valido = ($NovoValor -match '^[0-9]+$') -or ($NovoValor.Trim().ToLower() -eq "remover")
-        if (-not $valido) { Write-Warning "❌ Valor inválido. Digite apenas números ou 'remover'." }
+        $NovoValor = Read-Host "`nInforme o novo valor para 'MultiplicadorCPU' (somente números)"
+        $valido = $NovoValor -match '^[0-9]+$'
+        if (-not $valido) { Write-Warning "Digite apenas números." }
     } while (-not $valido)
 
-    $remover = $NovoValor.Trim().ToLower() -eq "remover"
+    $selecionados = @()
+    $opcao = Read-Host "`nDigite os números dos serviços separados por vírgula (ou 'todos' para alterar todos)"
 
-    # Seleção interativa
-    $selecionados = Selecionar-ServicosInterativamente -ListaDeServicos $servicosFiltrados
-    if (-not $selecionados.Count) { return }
+    if ($opcao.Trim().ToLower() -eq "todos") {
+        $selecionados = $servicosFiltrados
+    } else {
+        $indices = @()
+        $opcao.Split(",") | ForEach-Object {
+            $numeroLimpo = $_.Trim()
+            $parsed = 0
+            if ([int]::TryParse($numeroLimpo, [ref]$parsed)) {
+                if ($parsed -gt 0 -and $parsed -le $servicosFiltrados.Count) {
+                    $indices += ($parsed - 1)
+                }
+            }
+        }
+        $selecionados = $indices | ForEach-Object { $servicosFiltrados[$_] }
+    }
 
     if (-not $selecionados -or $selecionados.Count -eq 0) {
         Write-Warning "Nenhum serviço válido selecionado."
@@ -684,63 +750,44 @@ Function Atualizar-MultiplicadorCPU {
             $appSettings = $xml.configuration.appSettings
             $node = $appSettings.add | Where-Object { $_.key -eq "MultiplicadorCPU" }
 
-            if ($remover) {
-                if ($node) {
-                    $valorAntigo = $node.value
-                    $appSettings.RemoveChild($node) | Out-Null
+            if ($node) {
+                $valorAntigo = $node.value
+                if ($valorAntigo -ne $NovoValor) {
+                    $node.value = "$NovoValor"
                     $xml.Save($configPath)
-                    Write-Host "❌ $($servico.DisplayName): Parâmetro 'MultiplicadorCPU' removido."
-                    Registrar-Log -Servico $servico.DisplayName -Parametro "MultiplicadorCPU" -ValorAntigo $valorAntigo -ValorNovo "REMOVIDO" -ArquivoConfig $configPath
-
-                    Write-Host "🔄 Reiniciando o serviço '$($servico.DisplayName)'..."
-                    try {
-                        Stop-Service -Name $servico.Name -Force -ErrorAction Stop
-                        Start-Service -Name $servico.Name -ErrorAction Stop
-                        Write-Host "✅ Serviço '$($servico.DisplayName)' reiniciado com sucesso." -ForegroundColor Green
-                    } catch {
-                        Write-Warning "❌ Erro ao reiniciar o serviço '$($servico.Name)': $_"
-                    }
+                    Write-Host "✅ $($servico.DisplayName): $valorAntigo → $NovoValor"
+                    Registrar-Log -Servico $servico.DisplayName -Parametro "MultiplicadorCPU" -ValorAntigo $valorAntigo -ValorNovo $NovoValor -ArquivoConfig $configPath
                 } else {
-                    Write-Host "ℹ️ $($servico.DisplayName) não possui o parâmetro 'MultiplicadorCPU' para remoção." -ForegroundColor Yellow
+                    Write-Host "ℹ️ $($servico.DisplayName) já possui o valor desejado ($NovoValor)" -ForegroundColor Yellow
+                    continue
                 }
             } else {
-                if ($node) {
-                    $valorAntigo = $node.value
-                    if ($valorAntigo -ne $NovoValor) {
-                        $node.value = "$NovoValor"
-                        $xml.Save($configPath)
-                        Write-Host "✅ $($servico.DisplayName): $valorAntigo → $NovoValor"
-                        Registrar-Log -Servico $servico.DisplayName -Parametro "MultiplicadorCPU" -ValorAntigo $valorAntigo -ValorNovo $NovoValor -ArquivoConfig $configPath
+                Write-Warning "⚠️ O parâmetro 'MultiplicadorCPU' não foi encontrado no serviço '$($servico.DisplayName)'."
 
-                        Write-Host "🔄 Reiniciando o serviço '$($servico.DisplayName)'..."
-                        try {
-                            Stop-Service -Name $servico.Name -Force -ErrorAction Stop
-                            Start-Service -Name $servico.Name -ErrorAction Stop
-                            Write-Host "✅ Serviço '$($servico.DisplayName)' reiniciado com sucesso." -ForegroundColor Green
-                        } catch {
-                            Write-Warning "❌ Erro ao reiniciar o serviço '$($servico.Name)': $_"
-                        }
-                    } else {
-                        Write-Host "ℹ️ $($servico.DisplayName) já possui o valor desejado ($NovoValor)" -ForegroundColor Yellow
-                    }
-                } else {
-                    $newNode = $xml.CreateElement("add")
-                    $newNode.SetAttribute("key", "MultiplicadorCPU")
-                    $newNode.SetAttribute("value", "$NovoValor")
-                    $appSettings.AppendChild($newNode) | Out-Null
-                    $xml.Save($configPath)
-                    Write-Host "➕ $($servico.DisplayName): Parâmetro 'MultiplicadorCPU' adicionado com valor $NovoValor"
-                    Registrar-Log -Servico $servico.DisplayName -Parametro "MultiplicadorCPU" -ValorAntigo "N/A" -ValorNovo $NovoValor -ArquivoConfig $configPath
-
-                    Write-Host "🔄 Reiniciando o serviço '$($servico.DisplayName)'..."
-                    try {
-                        Stop-Service -Name $servico.Name -Force -ErrorAction Stop
-                        Start-Service -Name $servico.Name -ErrorAction Stop
-                        Write-Host "✅ Serviço '$($servico.DisplayName)' reiniciado com sucesso." -ForegroundColor Green
-                    } catch {
-                        Write-Warning "❌ Erro ao reiniciar o serviço '$($servico.Name)': $_"
-                    }
+                $resposta = Read-Host "Deseja adicioná-lo com valor '$NovoValor'? (S/N)"
+                if ($resposta.Trim().ToUpper() -ne "S") {
+                    Write-Host "⏭️ Inclusão cancelada." -ForegroundColor DarkGray
+                    continue
                 }
+
+                # Adiciona novo parâmetro
+                $newNode = $xml.CreateElement("add")
+                $newNode.SetAttribute("key", "MultiplicadorCPU")
+                $newNode.SetAttribute("value", "$NovoValor")
+                $appSettings.AppendChild($newNode) | Out-Null
+                $xml.Save($configPath)
+                Write-Host "➕ $($servico.DisplayName): Parâmetro 'MultiplicadorCPU' adicionado com valor $NovoValor"
+                Registrar-Log -Servico $servico.DisplayName -Parametro "MultiplicadorCPU" -ValorAntigo "N/A" -ValorNovo $NovoValor -ArquivoConfig $configPath
+            }
+
+            # Reinicia o serviço
+            Write-Host "🔄 Reiniciando o serviço '$($servico.DisplayName)'..."
+            try {
+                Stop-Service -Name $servico.Name -Force -ErrorAction Stop
+                Start-Service -Name $servico.Name -ErrorAction Stop
+                Write-Host "✅ Serviço '$($servico.DisplayName)' reiniciado com sucesso." -ForegroundColor Green
+            } catch {
+                Write-Warning "❌ Erro ao reiniciar o serviço '$($servico.Name)': $_"
             }
 
         } catch {
@@ -1017,7 +1064,6 @@ function ExportarConfigWorker {
         Write-Host "`n✅ Arquivo exportado com sucesso para: $arquivoDestino"
     }
 }
-
 
 # MENU INICIAL
 do {
